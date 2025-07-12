@@ -2,116 +2,252 @@
 package main
 
 import ( // OLÁ RAPAZES ESSES SÃO OS PACOTES QUE VAMOS USAR
-	"fmt"  // pacote pra textos
-	"log"  // pacote pra registrar as mensagens de erro
-	"time" // para controlar o tempo
+	"fmt" // pacote pra textos
+	"image/color"
+	"log" // pacote pra registrar as mensagens de erro
+	"os"
+	"runtime" // Importado para obter o número de núcleos da CPU
+	"sort"
 
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
-	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/net"
+	// para controlar o tempo
+
+	// Pacotes do Gio para criar a interface gráfica
+	"gioui.org/app"
+	"gioui.org/font/gofont"
+	"gioui.org/io/system"
+	"gioui.org/layout"
+	"gioui.org/op"
+	"gioui.org/widget"
+	"gioui.org/widget/material"
+
+	// Pacotes do gopsutil para puxar os dados
+	"github.com/shirou/gopsutil/v3/process"
 )
 
-func getCpuUsage() {
+// Lista com os nomes das abas
+var nomesDasAbas = []string{"Processos", "Desempenho", "Historico", "Empty"}
 
-	percent, err := cpu.Percent(time.Second, false)
-	if err != nil {
-		log.Printf("Erro ao obter uso da CPU: %v", err)
-		return
-	}
+// abaSelecionada indica qual aba está ativa
+var abaSelecionada int
+var ordenarPor = "CPU"       // opções: "CPU", "MEM", "ALFABETICO"
+var ordenarCrescente = false // false = maior para menor, true = menor para maior
+var btnCPU, btnMEM, btnALF, btnOrdem widget.Clickable
 
-	// 'percent' é um slice, mas com 'percpu=false', ele terá apenas um elemento.
-	if len(percent) > 0 {
-		fmt.Printf("Uso de CPU: %.2f%%\n", percent[0])
-	}
-}
-
-func getRamUsage() {
-	vmStat, err := mem.VirtualMemory() // vmstat da umas informações da memoria
-	if err != nil {
-		log.Printf("Erro ao obter uso de RAM: %v", err)
-		return
-	}
-	// tudo ta em byte então converte para gb pra uma melgor leitura
-	totalGB := float64(vmStat.Total) / (1024 * 1024 * 1024)
-	usedGB := float64(vmStat.Used) / (1024 * 1024 * 1024)
-
-	fmt.Printf(
-		"Uso de RAM: %.2f GB / %.2f GB (%.2f%%)\n",
-		usedGB,
-		totalGB,
-		vmStat.UsedPercent,
-	)
-}
-
-func getDiskUsage() {
-
-	// a biblioteca é pica ela vai pegar o caminho do sistema ta
-	path := "/"
-	diskStat, err := disk.Usage(path)
-	if err != nil {
-		log.Printf("Erro ao obter uso de Disco: %v", err)
-		return
-	}
-
-	// conversao de novo
-	totalGB := float64(diskStat.Total) / (1024 * 1024 * 1024)
-	usedGB := float64(diskStat.Used) / (1024 * 1024 * 1024)
-
-	fmt.Printf(
-		"Uso de Disco (%s): %.2f GB / %.2f GB (%.2f%%)\n",
-		path,
-		usedGB,
-		totalGB,
-		diskStat.UsedPercent,
-	)
-}
-
-// getNetUsage mostra ai os byte
-func getNetUsage() {
-	// 'pernic=false' soma as estatísticas de todas as interfaces
-	ioCounters, err := net.IOCounters(false)
-	if err != nil {
-		log.Printf("Erro ao obter uso de Rede: %v", err)
-		return
-	}
-
-	// ioCounters é um slice, mas com 'pernic=false', ele terá apenas um elemento, ou seja ela vai juntar
-	// as informações das placas de redes e botar tudo num lugar só
-	if len(ioCounters) > 0 {
-		stats := ioCounters[0]
-		// byte pra mb agora
-		bytesSentMB := float64(stats.BytesSent) / (1024 * 1024)
-		bytesRecvMB := float64(stats.BytesRecv) / (1024 * 1024)
-
-		fmt.Printf(
-			"Uso de Rede: %.2f MB enviados / %.2f MB recebidos\n",
-			bytesSentMB,
-			bytesRecvMB,
-		)
-	}
-}
+// botoesDasAbas são os botões clicáveis no topo da interface
+var botoesDasAbas [4]widget.Clickable
 
 func main() {
-	fmt.Println("--- Agente de Monitoramento de Recursos ---")
-	fmt.Println("Pressione CTRL+C para sair.")
+	// Inicia a janela da aplicação em uma goroutine
+	go func() {
+		janela := app.NewWindow()
 
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop() // Garante que o ticker seja limpo ao sair.
+		// Chama a função que desenha e controla a janela
+		if err := iniciarLoopDaJanela(janela); err != nil {
+			log.Fatal(err)
+		}
+
+		os.Exit(0)
+	}()
+
+	// Inicia o loop principal do Gio
+	app.Main()
+}
+
+// iniciarLoopDaJanela é o loop principal da UI
+func iniciarLoopDaJanela(janela *app.Window) error {
+	tema := material.NewTheme(gofont.Collection())
+	var operacoes op.Ops
 
 	for {
+		evento := <-janela.Events()
 
-		<-ticker.C // é um canal usado para receber os dados
+		switch evento := evento.(type) {
+		case system.DestroyEvent:
+			return evento.Err
+		case system.FrameEvent:
+			gtx := layout.NewContext(&operacoes, evento)
 
-		fmt.Println("-------------------------------------------")
-		fmt.Printf("Status em: %s\n", time.Now().Format("15:04:05")) // isso aqui um bizu que o gpt deu KKKKKKKKK ele falou que em GO
-		// a formatação é usado com exemplos, achei tendencia
+			layout.Flex{
+				Axis: layout.Vertical,
+			}.Layout(gtx,
 
-		getCpuUsage()
-		getRamUsage()
-		getDiskUsage()
-		getNetUsage()
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					var elementos []layout.FlexChild
 
-		fmt.Println("-------------------------------------------")
+					for i := range botoesDasAbas {
+						botao := material.Button(tema, &botoesDasAbas[i], nomesDasAbas[i])
+						idx := i
+						elementos = append(elementos, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+							if botoesDasAbas[idx].Clicked() {
+								abaSelecionada = idx
+							}
+							return botao.Layout(gtx)
+						}))
+					}
+
+					return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, elementos...)
+				}),
+
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					if abaSelecionada == 0 {
+						return layout.Flex{
+							Axis:    layout.Horizontal,
+							Spacing: layout.SpaceAround,
+						}.Layout(gtx,
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								btn := material.Button(tema, &btnCPU, "CPU")
+								if btnCPU.Clicked() {
+									ordenarPor = "CPU"
+								}
+								return btn.Layout(gtx)
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								btn := material.Button(tema, &btnMEM, "MEM")
+								if btnMEM.Clicked() {
+									ordenarPor = "MEM"
+								}
+								return btn.Layout(gtx)
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								btn := material.Button(tema, &btnALF, "Alfabético")
+								if btnALF.Clicked() {
+									ordenarPor = "ALFABETICO"
+								}
+								return btn.Layout(gtx)
+							}),
+							layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+								textoBtn := "Decrescente"
+								if ordenarCrescente {
+									textoBtn = "Crescente"
+								}
+								btn := material.Button(tema, &btnOrdem, textoBtn)
+								if btnOrdem.Clicked() {
+									ordenarCrescente = !ordenarCrescente
+								}
+								return btn.Layout(gtx)
+							}),
+						)
+					}
+					return layout.Dimensions{}
+				}),
+
+				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+					switch abaSelecionada {
+					case 0:
+						return desenharAbaProcessos(gtx, tema)
+					default:
+						texto := material.Body1(tema, fmt.Sprintf("Conteúdo da aba: %s (em branco)", nomesDasAbas[abaSelecionada]))
+						texto.Color = color.NRGBA{A: 255}
+						return texto.Layout(gtx)
+					}
+				}),
+			)
+
+			evento.Frame(gtx.Ops)
+		}
 	}
+}
+
+// Criar um widget.Clickable reutilizável para os botões de ordenação
+func newClickable(id string) *widget.Clickable {
+	// Armazenar por id não é necessário, só criar novo
+	return &widget.Clickable{}
+}
+
+// substituir desenharAbaProcessos por essa versão:
+
+func desenharAbaProcessos(gtx layout.Context, tema *material.Theme) layout.Dimensions {
+	numCPU := runtime.NumCPU() * 2
+	if numCPU == 0 {
+		numCPU = 1
+	}
+	floatNumCPU := float64(numCPU)
+
+	listaDeProcessos, err := process.Processes()
+	if err != nil {
+		log.Printf("Erro ao obter lista de processos: %v", err)
+		return layout.Dimensions{}
+	}
+
+	type somaInfo struct {
+		usoCPU float64
+		usoRAM float32
+		pids   map[int32]bool
+	}
+
+	processosMap := make(map[string]*somaInfo)
+
+	for _, proc := range listaDeProcessos {
+		nome, _ := proc.Name()
+		if nome == "" {
+			continue
+		}
+
+		pid := proc.Pid
+		usoCPU, errCPU := proc.CPUPercent()
+		usoRAM, errRAM := proc.MemoryPercent()
+		if errCPU != nil || errRAM != nil {
+			continue
+		}
+
+		if info, ok := processosMap[nome]; ok {
+			if !info.pids[pid] {
+				info.usoCPU += usoCPU
+				info.usoRAM += usoRAM
+				info.pids[pid] = true
+			}
+		} else {
+			processosMap[nome] = &somaInfo{
+				usoCPU: usoCPU,
+				usoRAM: usoRAM,
+				pids:   map[int32]bool{pid: true},
+			}
+		}
+	}
+
+	tipos := make([]string, 0, len(processosMap))
+	for nome := range processosMap {
+		tipos = append(tipos, nome)
+	}
+
+	switch ordenarPor {
+	case "CPU":
+		sort.Slice(tipos, func(i, j int) bool {
+			if ordenarCrescente {
+				return processosMap[tipos[i]].usoCPU < processosMap[tipos[j]].usoCPU
+			}
+			return processosMap[tipos[i]].usoCPU > processosMap[tipos[j]].usoCPU
+		})
+	case "MEM":
+		sort.Slice(tipos, func(i, j int) bool {
+			if ordenarCrescente {
+				return processosMap[tipos[i]].usoRAM < processosMap[tipos[j]].usoRAM
+			}
+			return processosMap[tipos[i]].usoRAM > processosMap[tipos[j]].usoRAM
+		})
+	case "ALFABETICO":
+		sort.Slice(tipos, func(i, j int) bool {
+			if ordenarCrescente {
+				return tipos[i] < tipos[j]
+			}
+			return tipos[i] > tipos[j]
+		})
+	}
+
+	lista := layout.List{Axis: layout.Vertical}
+
+	return lista.Layout(gtx, len(tipos), func(gtx layout.Context, i int) layout.Dimensions {
+		if i >= len(tipos) {
+			return layout.Dimensions{}
+		}
+
+		nome := tipos[i]
+		info := processosMap[nome]
+		usoCPUNormalizado := info.usoCPU / floatNumCPU
+
+		texto := fmt.Sprintf("Nome: %-30s | CPU: %6.2f%% | MEM: %5.2f%% | Instâncias: %d",
+			nome, usoCPUNormalizado, info.usoRAM, len(info.pids))
+
+		return material.Body2(tema, texto).Layout(gtx)
+	})
 }
