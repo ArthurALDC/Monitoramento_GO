@@ -1,0 +1,68 @@
+{% include "header.django" %}
+<h1>{{ Title }}</h1>
+
+<div id="dashboard">
+    <h2>Desempenho em tempo real</h2>
+    <div>
+        <strong>CPU:</strong> <span id="cpu"></span>% <span id="cpuabs"></span><br>
+        <strong>Memória:</strong> <span id="mem"></span>% <span id="memabs"></span><br>
+        <strong>Disco:</strong> <span id="disk"></span>% <span id="diskabs"></span> <span id="diskvel"></span>
+    </div>
+    <canvas id="cpuChart" width="400" height="100"></canvas>
+    <canvas id="memChart" width="400" height="100"></canvas>
+    <canvas id="diskChart" width="400" height="100"></canvas>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+let cpuChart, memChart, diskChart;
+function createChart(ctx, label, color) {
+    return new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: Array.from({ length: 60 }, (_, i) => i + 1),
+            datasets: [{
+                label: label, data: [], borderColor: color, backgroundColor: color + '33',
+                borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0,
+            }]
+        },
+        options: {
+            scales: {
+                y: { beginAtZero: true, max: 100 },
+                x: {}
+            },
+            plugins: { legend: { labels: { color: '#222' } } }
+        }
+    });
+}
+window.onload = function() {
+    cpuChart = createChart(document.getElementById('cpuChart').getContext('2d'), 'CPU (%)', '#00bcd4');
+    memChart = createChart(document.getElementById('memChart').getContext('2d'), 'Memória (%)', '#ff9800');
+    diskChart = createChart(document.getElementById('diskChart').getContext('2d'), 'Disco (%)', '#4caf50');
+    fetchAndUpdate();
+    setInterval(fetchAndUpdate, 2000);
+}
+async function fetchAndUpdate() {
+    try {
+        const resp = await fetch('/api/performance');
+        const data = await resp.json();
+        document.getElementById('cpu').textContent = data.cpuHistory[data.cpuHistory.length-1]?.toFixed(1) || '0';
+        document.getElementById('mem').textContent = data.memHistory[data.memHistory.length-1]?.toFixed(1) || '0';
+        // Exibir percentual do disco com 3 casas decimais
+        let diskPercent = data.diskHistory[data.diskHistory.length-1];
+        document.getElementById('disk').textContent = (diskPercent !== undefined && diskPercent !== null) ? diskPercent.toFixed(4) : '0';
+        // Exibir valores absolutos
+        document.getElementById('cpuabs').textContent = data.cpuFreq ? `(${data.cpuFreq.toFixed(0)} MHz)` : '';
+        document.getElementById('memabs').textContent = (data.memUsedMB && data.memTotalMB) ? `(${data.memUsedMB.toFixed(0)} MB / ${data.memTotalMB.toFixed(0)} MB)` : '';
+        document.getElementById('diskabs').textContent = (data.diskUsedGB && data.diskTotalGB) ? `(${data.diskUsedGB.toFixed(1)} GB / ${data.diskTotalGB.toFixed(1)} GB)` : '';
+        document.getElementById('diskvel').textContent = (data.diskReadKBs || data.diskWriteKBs) ? `[Leitura: ${data.diskReadKBs?.toFixed(1) || 0} KB/s | Gravação: ${data.diskWriteKBs?.toFixed(1) || 0} KB/s]` : '';
+        cpuChart.data.datasets[0].data = data.cpuHistory;
+        cpuChart.update();
+        memChart.data.datasets[0].data = data.memHistory;
+        memChart.update();
+        diskChart.data.datasets[0].data = data.diskHistory;
+        diskChart.update();
+    } catch (e) {
+        console.error('Erro ao buscar desempenho:', e);
+    }
+}
+</script>
